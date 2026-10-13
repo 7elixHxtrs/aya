@@ -1,0 +1,6 @@
+{
+  "appId": "com.metalhero.touch",
+  "appName": "Metal Hero Touch",
+  "webDir": "www",
+  "android": { "allowMixedContent": false }
+}

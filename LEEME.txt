@@ -1,0 +1,23 @@
+COMO GENERAR EL APK (Windows / Mac / Linux)
+
+Necesitas: Node.js (nodejs.org) y Android Studio (developer.android.com/studio)
+
+1) Abre una terminal en esta carpeta y ejecuta:
+   npm install
+   npx cap add android
+   npx cap sync android
+   npx cap open android
+
+2) En Android Studio espera a que termine el Gradle Sync, luego:
+   Build > Build Bundle(s) / APK(s) > Build APK(s)
+
+3) El APK queda en:
+   android/app/build/outputs/apk/debug/app-debug.apk
+   Pasalo al telefono e instalalo (activa "instalar apps desconocidas").
+
+Opcional: en android/app/src/main/AndroidManifest.xml agrega
+   android:screenOrientation="fullSensor"
+   dentro de <activity> para permitir vertical y horizontal.
+
+Nota: el juego carga la fuente y el lector ZIP desde internet (Google Fonts / cdnjs).
+Sin conexion funciona igual, pero sin la fuente Bebas Neue y sin soporte .zip.
