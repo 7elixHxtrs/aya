@@ -1,10 +1,15 @@
 {
-  "name": "metal-hero-touch",
+  "name": "pocket-hero",
   "version": "1.0.0",
   "private": true,
   "dependencies": {
     "@capacitor/android": "^6.0.0",
     "@capacitor/cli": "^6.0.0",
     "@capacitor/core": "^6.0.0"
+  },
+  "scripts": {
+    "capacitor:copy:after": "node tools/patch-android.js",
+    "capacitor:update:after": "node tools/patch-android.js",
+    "capacitor:sync:after": "node tools/patch-android.js"
   }
 }

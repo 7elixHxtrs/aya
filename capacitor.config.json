@@ -1,6 +1,9 @@
 {
   "appId": "com.metalhero.touch",
-  "appName": "Metal Hero Touch",
+  "appName": "Pocket Hero",
   "webDir": "www",
-  "android": { "allowMixedContent": false }
+  "android": {
+    "allowMixedContent": false
+  },
+  "backgroundColor": "#000000"
 }
