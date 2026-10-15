@@ -516,6 +516,21 @@ async function dbAdd(meta,data){
   });
 }
 /* Convierte los archivos guardados (o recién cargados) en una canción jugable */
+/* lee solo el chart (rápido, sin tocar el audio) y cuenta las notas de cada dificultad */
+function chartDiffs(rec){
+  const song=rec.kind==='chart'?parseChart(new TextDecoder('utf-8').decode(rec.chart)):parseMid(rec.chart.slice(0));
+  const o={};for(const k in song.diffs)o[k]=song.diffs[k].notes.length;
+  if(!Object.keys(o).length)throw new Error('La canción no tiene pista de guitarra (Single).');
+  return o;
+}
+async function dbSetDiffs(id,diffs){
+  const db=await dbOpen();
+  return new Promise((res,rej)=>{
+    const tx=db.transaction('meta','readwrite'),st=tx.objectStore('meta'),q=st.get(id);
+    q.onsuccess=()=>{const m=q.result;if(m){m.diffs=diffs;st.put(m)}};
+    tx.oncomplete=()=>res();tx.onerror=()=>rej(tx.error);
+  });
+}
 async function buildSong(rec){
   ensureCtx();
   const song=rec.kind==='chart'?parseChart(new TextDecoder('utf-8').decode(rec.chart)):parseMid(rec.chart.slice(0));
@@ -561,16 +576,17 @@ async function loadFiles(list){
     const rec={kind:chartF?'chart':'mid',chart:await (chartF||midF).get(),ini,audio:[],
       title:ip.name||(chartF||midF).name.replace(/\.[^.]+$/,''),artist:ip.artist||'',delay:(parseFloat(ip.delay)||0)/1000};
     for(const a of auds)rec.audio.push({name:a.name,data:await a.get()});
-    const song=await buildSong(rec);              // valida y decodifica
+    const dfs=chartDiffs(rec);                    // valida el chart; el audio se carga al pulsar Tocar
     setStatus('Guardando en el teléfono…');
     let id=null,saveErr='';
-    try{id=await dbAdd({title:rec.title,artist:rec.artist},rec)}catch(e){saveErr=(e&&e.message)||'error'}
-    lib.forEach(x=>{if(!x.demo)x.song=null});    // libera memoria de las demás
-    const it={id,title:rec.title,artist:rec.artist,song};
-    lib.push(it);sel=lib.length-1;cur=song;cfg.last=id||0;save();
-    if(!cur.diffs[cfg.diff])cfg.diff=['expert','hard','medium','easy'].find(d=>cur.diffs[d]);
+    try{id=await dbAdd({title:rec.title,artist:rec.artist,diffs:dfs},rec)}catch(e){saveErr=(e&&e.message)||'error'}
+    lib.forEach(x=>{if(!x.demo&&!x.rec)x.song=null});    // libera memoria de las demás
+    const it={id,title:rec.title,artist:rec.artist,diffs:dfs,song:null};
+    if(id==null)it.rec=rec;                       // no se pudo guardar: queda en memoria durante esta sesión
+    lib.push(it);sel=lib.length-1;cur=null;cfg.last=id||0;save();
+    if(!dfs[cfg.diff])cfg.diff=['expert','hard','medium','easy'].find(d=>dfs[d]);
     renderSongs();renderMain();
-    setStatus(id!=null?'Canción cargada y guardada. Seguirá aquí cuando vuelvas.':'Canción cargada, pero no se pudo guardar ('+saveErr+'). Se perderá al cerrar.');
+    setStatus(id!=null?'Canción guardada. Seguirá aquí cuando vuelvas.':'Canción añadida, pero no se pudo guardar ('+saveErr+'). Se perderá al cerrar.');
     show('songs');
   }catch(err){
     console.error(err);setStatus('Error: '+(err&&err.message?err.message:err));
@@ -636,7 +652,8 @@ function makeDemo(){
 }
 
 /* ---------- menús ---------- */
-const lib=[{demo:true,title:'Demo Riff',artist:'Pocket Hero (incluida)',song:null}];
+const DEMO_DIFFS={easy:65,medium:125,hard:180,expert:235};
+const lib=[{demo:true,title:'Demo Riff',artist:'Pocket Hero (incluida)',diffs:DEMO_DIFFS,song:null}];
 let sel=0;
 const SCR=['title','main','songs','opts','help'];
 function show(n){
@@ -654,29 +671,47 @@ function renderMain(){
 let ldTimer=null;
 function loadingBegin(delay){clearTimeout(ldTimer);ldTimer=setTimeout(()=>$('loading').classList.remove('hide'),delay==null?120:delay)}
 function loadingEnd(){clearTimeout(ldTimer);$('loading').classList.add('hide')}
-let pickTok=0;
+let pickTok=0,startBusy=false;
+const fixDiff=it=>{if(it.diffs&&!it.diffs[cfg.diff])cfg.diff=['expert','hard','medium','easy'].find(d=>it.diffs[d])};
+/* elegir una canción solo prepara la lista de dificultades (no carga el audio) */
 async function pickSong(i){
   const tok=++pickTok;sel=i;const it=lib[i];
-  lib.forEach((x,j)=>{if(j!==i&&!x.demo)x.song=null});   // libera memoria de las demás
-  cfg.last=it.id||0;save();
-  if(!it.song){
-    renderSongs();loadingBegin();
+  lib.forEach((x,j)=>{if(j!==i&&!x.demo&&!x.rec)x.song=null});   // libera memoria de las demás
+  cfg.last=it.id||0;save();cur=it.song||null;
+  if(!it.diffs&&it.id){            // guardada con una versión anterior: leer solo el resumen del chart
+    renderSongs();setStatus('Leyendo canción…');
     try{
-      if(it.demo){setStatus('Generando demo…');await new Promise(r=>setTimeout(r,40));it.song=makeDemo()}
-      else if(it.id){
-        setStatus('Cargando canción…');
-        const rec=await dbGet(it.id);
-        if(!rec)throw new Error('No encontré la canción guardada.');
-        it.song=await buildSong(rec);
-      }
-      if(tok===pickTok)setStatus('');
-    }catch(e){console.error(e);if(tok===pickTok)setStatus('Error: '+(e&&e.message?e.message:e))}
-    finally{loadingEnd()}
+      const rec=await dbGet(it.id);
+      if(rec){it.diffs=chartDiffs(rec);dbSetDiffs(it.id,it.diffs).catch(()=>{})}
+      setStatus('');
+    }catch(e){console.error(e);setStatus('Error: '+(e&&e.message?e.message:e))}
   }
   if(tok!==pickTok)return;
-  cur=it.song;
-  if(cur&&!cur.diffs[cfg.diff])cfg.diff=['expert','hard','medium','easy'].find(d=>cur.diffs[d]);
-  renderSongs();renderMain();
+  fixDiff(it);renderSongs();renderMain();
+}
+/* prepara el audio completo de la canción elegida */
+async function ensureSong(it){
+  if(it.song)return it.song;
+  if(it.demo){setStatus('Generando demo…');await new Promise(r=>setTimeout(r,40));it.song=makeDemo();return it.song}
+  setStatus('Cargando canción…');
+  const rec=it.rec||await dbGet(it.id);
+  if(!rec)throw new Error('No encontré la canción guardada.');
+  it.song=await buildSong(rec);
+  return it.song;
+}
+/* botón TOCAR: carga la canción (con pantalla de carga) y empieza */
+async function startSong(){
+  const it=lib[sel];if(!it||startBusy)return;
+  startBusy=true;
+  try{
+    if(!it.song){
+      loadingBegin(0);
+      try{await ensureSong(it)}
+      catch(e){console.error(e);setStatus('Error: '+(e&&e.message?e.message:e));return}
+      finally{loadingEnd()}
+    }
+    setStatus('');cur=it.song;play();
+  }finally{startBusy=false}
 }
 async function delSong(i){
   const it=lib[i];if(!it||it.demo)return;
@@ -705,24 +740,24 @@ function renderSongs(){
     }
     el.appendChild(row);
   });
-  const it=lib[sel],s=it&&it.song;
+  const it=lib[sel],dfs=it&&it.diffs;
   $('dName').textContent=it?it.title:'—';
   $('dArt').textContent=it?(it.artist||'—'):'';
   document.querySelectorAll('#diffs .dc').forEach(b=>{
-    const d=b.dataset.d,ok=s&&s.diffs[d];
+    const d=b.dataset.d,ok=dfs&&dfs[d];
     b.disabled=!ok;b.classList.toggle('on',!!ok&&d===cfg.diff);
-    b.querySelector('small').textContent=ok?s.diffs[d].notes.length+' notas':'';
+    b.querySelector('small').textContent=ok?dfs[d]+' notas':'';
   });
-  const bs=s&&best[s.title+'|'+cfg.diff];
+  const bs=it&&best[it.title+'|'+cfg.diff];
   $('dBest').innerHTML=bs?'MEJOR <b>'+Math.round(bs.score).toLocaleString('es')+'</b> '+'★'.repeat(bs.stars):'';
-  $('bPlay').disabled=!s;
+  $('bPlay').disabled=!dfs;
 }
 /* al abrir el juego: recupera las canciones guardadas */
 async function initLib(){
   try{
     if(navigator.storage&&navigator.storage.persist)navigator.storage.persist().catch(()=>{});
     const metas=await dbList();
-    metas.sort((a,b)=>a.id-b.id).forEach(m=>lib.push({id:m.id,title:m.title,artist:m.artist,song:null}));
+    metas.sort((a,b)=>a.id-b.id).forEach(m=>lib.push({id:m.id,title:m.title,artist:m.artist,diffs:m.diffs||null,song:null}));
     const k=lib.findIndex(x=>x.id&&x.id===cfg.last);if(k>0)sel=k;
   }catch(e){console.warn('Biblioteca guardada no disponible:',e)}
   renderSongs();renderMain();
@@ -734,7 +769,7 @@ function syncOpts(){
   $('nofail').classList.toggle('on',cfg.nofail);
   $('sfxT').classList.toggle('on',cfg.sfx);
   $('glowT').classList.toggle('on',cfg.glow);
-  $('ver').textContent='Pocket Hero v2.8 · '+(NATIVE?'app':'web')+' · pantalla '+W+'×'+H;
+  $('ver').textContent='Pocket Hero v2.9 · '+(NATIVE?'app':'web')+' · pantalla '+W+'×'+H;
   const fsOn=NATIVE||!!document.fullscreenElement;
   $('fs').classList.toggle('on',fsOn);
   $('fsNote').textContent=NATIVE?'Siempre activa en la app: se ocultan las barras del sistema.':'En el navegador puede que se pida permiso o no esté disponible.';
@@ -933,7 +968,7 @@ function toMenu(){
   $('menu').classList.remove('hide');
   show('songs');
 }
-$('bPlay').onclick=play;
+$('bPlay').onclick=startSong;
 $('pResume').onclick=resume;
 $('pRestart').onclick=()=>{actx.resume();$('pause').classList.add('hide');play()};
 $('pExit').onclick=toMenu;
